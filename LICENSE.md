@@ -44,7 +44,3 @@ This License shall be governed by and construed in accordance with the laws of t
 
 **Copyright:**
 © Magistrate Contributors
-
----
-
-This Markdown-formatted license file includes all the specified clauses and should be included as `LICENSE.md` in your software repository.
