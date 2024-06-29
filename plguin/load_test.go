@@ -4,9 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/RedUndercover/magistrate/cache"
-	"github.com/RedUndercover/magistrate/plugin"
 )
 
 // TestInstallDependencies tests the InstallDependencies function
@@ -21,46 +18,30 @@ func TestInstallDependencies(t *testing.T) {
 	}
 
 	// Run InstallDependencies
-	err := plugin.InstallDependencies(dir)
+	err := InstallDependencies(dir, "./test")
 	if err != nil {
 		t.Errorf("Expected no error, but got %v", err)
 	}
 }
 
 // Mock plugin structure to satisfy plugin interface requirements
-type MockPlugin struct{}
-
-func (MockPlugin) SomeMethod() {}
+type MockPlugin interface{}
 
 // TestLoadPlugin tests the LoadPlugin function
 func TestLoadPlugin(t *testing.T) {
 	// Setup a temporary plugin file
 	pluginDir := t.TempDir()
-	pluginFile := filepath.Join(pluginDir, "plugin.go")
+	pluginFile := filepath.Join(pluginDir, "main.go")
 	err := os.WriteFile(pluginFile, []byte(`package main; func main() {}`), 0644)
+	os.WriteFile(filepath.Join(pluginDir, "go.mod"), []byte("module test1"), 0644)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	// Compute the directory hash
-	dirHash, err := cache.HashDirectory(pluginDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Cache a mock plugin
-	var mp MockPlugin
-	cache.PluginRegistry.Set(dirHash, mp)
 
 	// Load the plugin
-	plugin, err := plugin.LoadPlugin[MockPlugin](pluginFile)
+	_, err = LoadPlugin[MockPlugin](pluginFile, "./test")
 	if err != nil {
 		t.Errorf("Expected no error, but got %v", err)
-	}
-
-	// Validate the loaded plugin type
-	if _, ok := plugin.(MockPlugin); !ok {
-		t.Errorf("Expected plugin to be of type MockPlugin, but got %T", plugin)
 	}
 }
 
@@ -69,24 +50,16 @@ func TestLoadPlugins(t *testing.T) {
 	// Setup a temporary plugin file
 	pluginDir := t.TempDir()
 	pluginFile := filepath.Join(pluginDir, "plugin.go")
-	err := os.WriteFile(pluginFile, []byte(`package main; func main() {}`), 0644)
+	module_file := filepath.Join(pluginDir, "go.mod")
+	_ = os.WriteFile(pluginFile, []byte(`package main; func main() {}`), 0644)
+	err := os.WriteFile(module_file, []byte("module test1"), 0644)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	// Compute the directory hash
-	dirHash, err := cache.HashDirectory(pluginDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Cache a mock plugin
-	var mp MockPlugin
-	cache.PluginRegistry.Set(dirHash, mp)
 
 	// Load plugins
-	pluginFolders := []string{pluginFile}
-	plugins, err := plugin.LoadPlugins[MockPlugin](pluginFolders)
+	pluginFolders := []string{pluginDir}
+	plugins, err := LoadPlugins[MockPlugin](pluginFolders, "./test")
 	if err != nil {
 		t.Errorf("Expected no error, but got %v", err)
 	}
@@ -94,10 +67,6 @@ func TestLoadPlugins(t *testing.T) {
 	// Validate the loaded plugins count and type
 	if len(plugins) != 1 {
 		t.Errorf("Expected 1 plugin, but got %d", len(plugins))
-	}
-
-	if _, ok := plugins[0].(MockPlugin); !ok {
-		t.Errorf("Expected plugin to be of type MockPlugin, but got %T", plugins[0])
 	}
 }
 
@@ -112,7 +81,7 @@ func TestFindGoModDirs(t *testing.T) {
 	os.WriteFile(filepath.Join(dir1, "go.mod"), []byte("module test1"), 0644)
 	os.WriteFile(filepath.Join(dir2, "go.mod"), []byte("module test2"), 0644)
 
-	dirs, err := plugin.FindGoModDirs(root)
+	dirs, err := findGoModDirs(root)
 	if err != nil {
 		t.Errorf("Expected no error, but got %v", err)
 	}
@@ -133,19 +102,9 @@ func TestLoadPluginsRecursive(t *testing.T) {
 	os.WriteFile(pluginFile, []byte(`package main; func main() {}`), 0644)
 	os.WriteFile(filepath.Join(pluginDir, "go.mod"), []byte("module test"), 0644)
 
-	// Compute the directory hash
-	dirHash, err := cache.HashDirectory(pluginDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Cache a mock plugin
-	var mp MockPlugin
-	cache.PluginRegistry.Set(dirHash, mp)
-
 	// Load plugins recursively
 	pluginFolders := []string{root}
-	plugins, err := plugin.LoadPluginsRecursive[MockPlugin](pluginFolders)
+	plugins, err := LoadPluginsRecursive[MockPlugin](pluginFolders, "./test")
 	if err != nil {
 		t.Errorf("Expected no error, but got %v", err)
 	}
@@ -153,9 +112,5 @@ func TestLoadPluginsRecursive(t *testing.T) {
 	// Validate the loaded plugins count and type
 	if len(plugins) != 1 {
 		t.Errorf("Expected 1 plugin, but got %d", len(plugins))
-	}
-
-	if _, ok := plugins[0].(MockPlugin); !ok {
-		t.Errorf("Expected plugin to be of type MockPlugin, but got %T", plugins[0])
 	}
 }

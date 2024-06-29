@@ -2,11 +2,11 @@ package plugin
 
 import (
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
-
-	"os/exec"
 
 	"github.com/RedUndercover/magistrate/cache"
 	"github.com/traefik/yaegi/interp"
@@ -34,7 +34,55 @@ func (e dependenciesError) Error() string {
 
 // installDependencies installs the dependencies of a plugin.
 // It runs 'go mod tidy' and 'go mod download' in the plugin's directory.
-func InstallDependencies(dir string) error {
+
+func copyFile(src, dst string) error {
+	sourceFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer sourceFile.Close()
+
+	destinationFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer destinationFile.Close()
+
+	_, err = io.Copy(destinationFile, sourceFile)
+	return err
+}
+
+// Recursively copy a directory from src to dst
+func copyDirectory(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		relativePath, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+
+		destinationPath := filepath.Join(dst, relativePath)
+
+		if info.IsDir() {
+			return os.MkdirAll(destinationPath, info.Mode())
+		}
+
+		return copyFile(path, destinationPath)
+	})
+}
+
+func InstallDependencies(dir string, gopath string) error {
+	// create the gopath directory if it doesn't exist
+	if _, err := os.Stat(gopath); os.IsNotExist(err) {
+		if err := os.MkdirAll(gopath, 0755); err != nil {
+			return err
+		}
+	}
+
+	// run 'go mod tidy' and 'go mod download' in the plugin's directory
 	cmd := exec.Command("go", "mod", "tidy")
 	cmd.Dir = dir
 	output, err := cmd.CombinedOutput()
@@ -49,12 +97,34 @@ func InstallDependencies(dir string) error {
 		return &dependenciesError{Plugin: dir, msg: fmt.Sprintf("error running 'go mod download': %s", output)}
 	}
 
-	return nil
+	// run 'go mod vendor' in the plugin's directory
+	cmd = exec.Command("go", "mod", "vendor")
+	cmd.Dir = dir
+	output, err = cmd.CombinedOutput()
+	if err != nil {
+		return &dependenciesError{Plugin: dir, msg: fmt.Sprintf("error running 'go mod vendor': %s", output)}
+	}
+
+	// copy the vendor directory to the gopath if vendor directory exists
+	_, err = os.Stat(filepath.Join(dir, "vendor"))
+	if os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return &dependenciesError{Plugin: dir, msg: fmt.Sprintf("error checking for vendor directory: %s", err)}
+	} else {
+		// copy the vendor directory to the gopath
+		err = copyDirectory(filepath.Join(dir, "vendor"), filepath.Join(gopath, "src"))
+		if err != nil {
+			return &dependenciesError{Plugin: dir, msg: fmt.Sprintf("error copying vendor directory: %s", err)}
+		}
+		return nil
+	}
 }
 
 // LoadPlugin loads a plugin from the specified location.
 // It checks if the plugin is already loaded in the cache and returns it if found.
-func LoadPlugin[T any](pluginLocation string) (T, error) {
+// Otherwise, it loads the plugin and caches it.
+func LoadPlugin[T any](pluginLocation string, gopath string) (T, error) {
 	var zero T
 
 	// Check if the plugin is already loaded
@@ -73,8 +143,14 @@ func LoadPlugin[T any](pluginLocation string) (T, error) {
 	// Grab plugin type
 	var contract = reflect.TypeOf((*T)(nil)).Elem()
 
+	// Install the plugin's dependencies
+	err = InstallDependencies(filepath.Dir(pluginLocation), gopath)
+	if err != nil {
+		return zero, err
+	}
+
 	// Create a new interpreter
-	i := interp.New(interp.Options{})
+	i := interp.New(interp.Options{GoPath: gopath})
 	i.Use(stdlib.Symbols)
 
 	// Load the plugin
@@ -101,11 +177,11 @@ func LoadPlugin[T any](pluginLocation string) (T, error) {
 }
 
 // LoadAllPlugins loads all plugins of the specified type from the specified folder.
-func LoadPlugins[T any](pluginFolders []string) ([]T, error) {
+func LoadPlugins[T any](pluginFolders []string, gopath string) ([]T, error) {
 	var plugins []T
 
 	for _, folder := range pluginFolders {
-		plugin, err := LoadPlugin[T](folder)
+		plugin, err := LoadPlugin[T](folder, gopath)
 		// ignore contract mismatch errors but catch all other errors
 		if _, ok := err.(*ContractVerifyError); !ok && err != nil {
 			return nil, err
@@ -140,8 +216,9 @@ func findGoModDirs(root string) ([]string, error) {
 }
 
 // LoadPluginsRecursive loads all plugins of the specified type from the specified folders and their subfolders.
-func LoadPluginsRecursive[T any](pluginFolders []string) ([]T, error) {
+func LoadPluginsRecursive[T any](pluginFolders []string, gopath string) ([]T, error) {
 	var plugins []T
+	var valid_directories []string
 	// under the plugin directories, recursively get all folders that have a go.mod file
 	// make a new one, lazy bones
 	for _, folder := range pluginFolders {
@@ -150,17 +227,18 @@ func LoadPluginsRecursive[T any](pluginFolders []string) ([]T, error) {
 		if err != nil {
 			return nil, err
 		}
+		valid_directories = append(valid_directories, dirs...)
+	}
 
-		// load all plugins in each directory
-		for _, dir := range dirs {
-			plugin, err := LoadPlugin[T](dir)
-			// ignore contract mismatch errors but catch all other errors
-			if _, ok := err.(*ContractVerifyError); !ok && err != nil {
-				return nil, err
-			}
-
-			plugins = append(plugins, plugin)
+	// load all plugins in each directory
+	for _, dir := range valid_directories {
+		plugin, err := LoadPlugin[T](dir, gopath)
+		// ignore contract mismatch errors but catch all other errors
+		if _, ok := err.(*ContractVerifyError); !ok && err != nil {
+			return nil, err
 		}
+
+		plugins = append(plugins, plugin)
 	}
 	return plugins, nil
 }
