@@ -67,7 +67,7 @@ func TestHashDirectory(t *testing.T) {
 	}
 
 	// Compute the hash of the directory
-	hash, err := hashDirectory(dir)
+	hash, err := HashDirectory(dir)
 	if err != nil {
 		t.Fatalf("Failed to hash directory: %v", err)
 	}

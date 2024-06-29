@@ -10,6 +10,14 @@ import (
 	"path/filepath"
 )
 
+type HashError struct {
+	Err error
+}
+
+func (e *HashError) Error() string {
+	return e.Err.Error()
+}
+
 func HashArgs(args ...interface{}) string {
 	hasher := md5.New()
 	for _, arg := range args {
@@ -19,36 +27,35 @@ func HashArgs(args ...interface{}) string {
 	return fmt.Sprintf("%x", hasher.Sum(nil))
 }
 
-// hashDirectory computes the MD5 hash of all files in a directory
-func hashDirectory(dirPath string) (string, error) {
-	hash := md5.New()
+// hashDirectory computes the MD5 hash of a directory structure and all of its files, nested directories, and their files.
+func HashDirectory(dir string) (string, error) {
+	hasher := md5.New()
 
-	// walk the directory and hash all files
-	err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return err
+			return &HashError{Err: err}
 		}
-		if !info.IsDir() {
-			file, err := os.Open(path)
-			if err != nil {
-				return err
-			}
-			defer file.Close()
 
-			if _, err := io.Copy(hash, file); err != nil {
-				return err
-			}
+		if info.IsDir() {
+			return nil
 		}
+
+		file, err := os.Open(path)
+		if err != nil {
+			return &HashError{Err: err}
+		}
+		defer file.Close()
+
+		_, err = io.Copy(hasher, file)
+		if err != nil {
+			return &HashError{Err: err}
+		}
+
 		return nil
 	})
-
-	// check for errors
 	if err != nil {
 		return "", err
 	}
 
-	// return the hash as a string
-	hashInBytes := hash.Sum(nil)
-	hashString := hex.EncodeToString(hashInBytes)
-	return hashString, nil
+	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
